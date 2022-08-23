@@ -106,21 +106,21 @@ class ListField(MongoField):
             )
         return value
 
-    class DictField(MongoField):
-        def get_prep_value(self, value):
-            if not isinstance(value, (dict, list)):
-                raise ValueError(
-                    f'Value: {value} must be of type dict/list'
-                )
-            return value
+class DictField(MongoField):
+    def get_prep_value(self, value):
+        if not isinstance(value, (dict, list)):
+            raise ValueError(
+                f'Value: {value} must be of type dict/list'
+            )
+        return value
 
-        def to_python(self, value):
-            if not isinstance(value, (dict, list)):
-                raise ValueError(
-                    f'Value: {value} stored in DB must be of type dict/list'
-                    'Did you miss any Migrations?'
-                )
-            return value
+    def to_python(self, value):
+        if not isinstance(value, (dict, list)):
+            raise ValueError(
+                f'Value: {value} stored in DB must be of type dict/list'
+                'Did you miss any Migrations?'
+            )
+        return value
 ##########END OF CUSTOM FIELDS ##########
 
 
