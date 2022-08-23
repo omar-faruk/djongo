@@ -83,6 +83,47 @@ class MongoField(Field):
     empty_strings_allowed = False
 
 
+##########START OF CUSTOM FIELD##########
+##### required for IMS for RSL########
+class ListField(MongoField):
+    """
+    MongoDB allows the saving of python lists as BSON Array type data. The `ListField` is useful in such cases.
+    """
+    empty_strings_allowed = False
+
+    def get_db_prep_value(self, value, connection, prepared=False):
+        if not isinstance(value, list):
+            raise ValueError(
+                f'Value: {value} must be of type list'
+            )
+        return value
+
+    def to_python(self, value):
+        if not isinstance(value, list):
+            raise ValueError(
+                f'Value: {value} stored in DB must be of type list'
+                'Did you miss any Migrations?'
+            )
+        return value
+
+    class DictField(MongoField):
+        def get_prep_value(self, value):
+            if not isinstance(value, (dict, list)):
+                raise ValueError(
+                    f'Value: {value} must be of type dict/list'
+                )
+            return value
+
+        def to_python(self, value):
+            if not isinstance(value, (dict, list)):
+                raise ValueError(
+                    f'Value: {value} stored in DB must be of type dict/list'
+                    'Did you miss any Migrations?'
+                )
+            return value
+##########END OF CUSTOM FIELDS ##########
+
+
 class JSONField(MongoField):
     def get_prep_value(self, value):
         if not isinstance(value, (dict, list)):

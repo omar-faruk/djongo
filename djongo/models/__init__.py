@@ -4,11 +4,11 @@ from django.db.models import *
 from .fields import (
     ArrayField, DjongoManager,
     EmbeddedField, ArrayReferenceField, ObjectIdField,
-    GenericObjectIdField, JSONField
+    GenericObjectIdField, JSONField,ListField,DictField
 )
 
 __all__ = django_models + [
     'DjongoManager', 'ArrayField',
     'EmbeddedField', 'ArrayReferenceField', 'ObjectIdField',
-    'GenericObjectIdField', 'JSONField'
+    'GenericObjectIdField', 'JSONField', 'ListField','DictField'
 ]
