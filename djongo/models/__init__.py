@@ -10,5 +10,5 @@ from .fields import (
 __all__ = django_models + [
     'DjongoManager', 'ArrayField',
     'EmbeddedField', 'ArrayReferenceField', 'ObjectIdField',
-    'GenericObjectIdField', 'JSONField', 'ListField','DictField'
+    'GenericObjectIdField', 'JSONField','ListField','DictField'
 ]

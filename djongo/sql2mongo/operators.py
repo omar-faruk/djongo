@@ -1,12 +1,9 @@
-# THIS FILE WAS CHANGED ON - 09 May 2022
-
 import re
 import typing
-import json
 from itertools import chain
 
 from sqlparse import tokens
-from sqlparse.sql import Token, Parenthesis, Comparison, IdentifierList, Identifier
+from sqlparse.sql import Token, Parenthesis, Comparison, IdentifierList, Identifier, Function
 
 from ..exceptions import SQLDecodeError
 from .sql_tokens import SQLToken, SQLStatement
@@ -14,15 +11,11 @@ from . import query
 
 
 def re_index(value: str):
-    match = list(re.finditer(r'%\(([0-9]+)\)s', value, flags=re.IGNORECASE))
-
+    match = re.match(r'%\(([0-9]+)\)s', value, flags=re.IGNORECASE)
     if match:
-        if len(match) == 1:
-            index = int(match[0].group(1))
-        else:
-            index = [int(x.group(1)) for x in match]
+        index = int(match.group(1))
     else:
-        match = re.match(r'NULL|true', value, flags=re.IGNORECASE)
+        match = re.match(r'NULL', value, flags=re.IGNORECASE)
         if not match:
             raise SQLDecodeError
         index = None
@@ -166,38 +159,19 @@ class LikeOp(_BinaryOp):
         self._regex = None
         self._make_regex(self.statement.next())
 
-    def check_embedded(self, to_match):
-        try:
-            check_dict = to_match
-            replace_chars = "\\%'"
-            for c in replace_chars:
-                if c == "'":
-                    check_dict = check_dict.replace("'", '"')
-                else:
-                    check_dict = check_dict.replace(c, "")
-            check_dict = json.loads(check_dict)
-            if isinstance(check_dict, dict):
-                return check_dict
-            else:
-                return to_match
-        except Exception as e:
-            return to_match
-
     def _make_regex(self, token):
         index = SQLToken.placeholder_index(token)
 
         to_match = self.params[index]
-        to_match = self.check_embedded(to_match)
-        if isinstance(to_match, str):
-            to_match = to_match.replace('%', '.*')
-            self._regex = '^' + to_match + '$'
-        elif isinstance(to_match, dict):
+        if isinstance(to_match, dict):
             field_ext, to_match = next(iter(to_match.items()))
             self._field += '.' + field_ext
-            self._regex = to_match
-        else:
+        if not isinstance(to_match, str):
             raise SQLDecodeError
-            
+
+        to_match = to_match.replace('%', '.*')
+        self._regex = '^' + to_match + '$'
+
     def to_mongo(self):
         return {self._field: {'$regex': self._regex}}
 
@@ -535,12 +509,7 @@ class CmpOp(_Op):
         self._operator = OPERATOR_MAP[self.statement.token_next(0)[1].value]
         index = re_index(self.statement.right.value)
 
-        if self._operator in NEW_OPERATORS:
-            index = index if isinstance(index, list) else [index]
-            self._constant = [self.params[i] for i in index]
-        else:
-            self._constant = self.params[index] if index is not None else MAP_INDEX_NONE[self.statement.right.value]
-
+        self._constant = self.params[index] if index is not None else None
         if isinstance(self._constant, dict):
             self._field_ext, self._constant = next(iter(self._constant.items()))
         else:
@@ -569,8 +538,6 @@ OPERATOR_MAP = {
     '<': '$lt',
     '>=': '$gte',
     '<=': '$lte',
-    'IN': '$in',
-    'NOT IN': '$nin'
 }
 OPERATOR_PRECEDENCE = {
     'IS': 8,
@@ -583,12 +550,3 @@ OPERATOR_PRECEDENCE = {
     'OR': 1,
     'generic': 0
 }
-
-MAP_INDEX_NONE = {
-    'NULL': None,
-    'True': True
-}
-
-NEW_OPERATORS = ['$in', '$nin']
-
-AND_OR_NOT_SEPARATOR = 3

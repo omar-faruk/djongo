@@ -13,8 +13,6 @@ MongoDB is defined.
 These are the main fields for working with MongoDB.
 """
 
-# THIS FILE WAS CHANGED ON - 28 Mar 2022
-
 import functools
 import json
 import typing
@@ -83,6 +81,23 @@ class MongoField(Field):
     empty_strings_allowed = False
 
 
+class JSONField(MongoField):
+    def get_prep_value(self, value):
+        if not isinstance(value, (dict, list)):
+            raise ValueError(
+                f'Value: {value} must be of type dict/list'
+            )
+        return value
+
+    def to_python(self, value):
+        if not isinstance(value, (dict, list)):
+            raise ValueError(
+                f'Value: {value} stored in DB must be of type dict/list'
+                'Did you miss any Migrations?'
+            )
+        return value
+
+
 ##########START OF CUSTOM FIELD##########
 ##### required for IMS for RSL########
 class ListField(MongoField):
@@ -123,24 +138,6 @@ class DictField(MongoField):
         return value
 ##########END OF CUSTOM FIELDS ##########
 
-
-class JSONField(MongoField):
-    def get_prep_value(self, value):
-        if not isinstance(value, (dict, list)):
-            raise ValueError(
-                f'Value: {value} must be of type dict/list'
-            )
-        return value
-
-    def to_python(self, value):
-        if not isinstance(value, (dict, list)):
-            raise ValueError(
-                f'Value: {value} stored in DB must be of type dict/list'
-                'Did you miss any Migrations?'
-            )
-        return value
-
-
 class ModelField(MongoField):
     """
     Allows for the inclusion of an instance of an abstract model as
@@ -152,7 +149,6 @@ class ModelField(MongoField):
                  model_container: typing.Type[Model],
                  *args, **kwargs):
         self.model_container = model_container
-        self.model_container._meta.abstract = False
         self._validate_container()
         super().__init__(*args, **kwargs)
 
