@@ -362,6 +362,7 @@ class _StatementParser:
                   statement: SQLStatement) -> '_Op':
         op = None
         kw = {'statement': statement, 'query': self.query}
+
         if tok.match(tokens.Keyword, 'AND'):
             op = AndOp(**kw)
 
@@ -377,12 +378,6 @@ class _StatementParser:
                 statement.skip(1)
             else:
                 op = NotOp(**kw)
-
-        elif tok.match(tokens.Keyword, 'LIKE'):
-            op = LikeOp(**kw)
-
-        elif tok.match(tokens.Keyword, 'iLIKE'):
-            op = iLikeOp(**kw)
 
         elif tok.match(tokens.Keyword, 'BETWEEN'):
             op = BetweenOp(**kw)
@@ -406,6 +401,12 @@ class _StatementParser:
 
         elif tok.match(tokens.Punctuation, (')', '(')):
             pass
+
+        elif tok.match(tokens.Keyword, 'LIKE'):
+            op = LikeOp(**kw)
+
+        elif tok.match(tokens.Keyword, 'iLIKE'):
+            op = iLikeOp(**kw)
 
         elif isinstance(tok, Identifier):
             pass
