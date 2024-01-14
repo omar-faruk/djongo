@@ -28,7 +28,7 @@ from .converters import (
     ColumnSelectConverter, AggColumnSelectConverter, FromConverter, WhereConverter,
     AggWhereConverter, InnerJoinConverter, OuterJoinConverter, LimitConverter, AggLimitConverter, OrderConverter,
     SetConverter, AggOrderConverter, DistinctConverter, NestedInQueryConverter, GroupbyConverter, OffsetConverter,
-    AggOffsetConverter, HavingConverter)
+    AggOffsetConverter, HavingConverter,OrderByConverter)
 
 from djongo import base
 logger = getLogger(__name__)
@@ -117,7 +117,6 @@ class SelectQuery(DQLQuery):
 
     def parse(self):
         statement = SQLStatement(self.statement)
-
         for tok in statement:
             if tok.match(tokens.DML, 'SELECT'):
                 self.selected_columns = ColumnSelectConverter(self, statement)
@@ -127,6 +126,9 @@ class SelectQuery(DQLQuery):
 
             elif tok.match(tokens.Keyword, 'LIMIT'):
                 self.limit = LimitConverter(self, statement)
+
+            elif tok.match(tokens.Keyword, 'ORDER BY'):
+                self.order = OrderByConverter(self, statement)
 
             elif tok.match(tokens.Keyword, 'ORDER'):
                 self.order = OrderConverter(self, statement)
@@ -355,17 +357,18 @@ class InsertQuery(DMLQuery):
 
     def _fill_values(self, statement: SQLStatement):
         for tok in statement:
-            if isinstance(tok, Parenthesis):
-                placeholder = SQLToken.token2sql(tok, self)
-                values = []
-                for index in placeholder:
-                    if isinstance(index, int):
-                        values.append(self.params[index])
-                    else:
-                        values.append(index)
-                self._values.append(values)
-            elif not tok.match(tokens.Keyword, 'VALUES'):
+            print(type(tok))
+            if not tok.match(None, 'VALUES',True):
                 raise SQLDecodeError
+
+            placeholder = SQLToken.token2sql(tok.tokens[2], self)
+            values = []
+            for index in placeholder:
+                if isinstance(index, int):
+                    values.append(self.params[index])
+                else:
+                    values.append(index)
+            self._values.append(values)
 
     def execute(self):
         docs = []
@@ -408,6 +411,8 @@ class InsertQuery(DMLQuery):
         self._table(statement)
         self._columns(statement)
         self._fill_values(statement)
+
+
 
 
 class AlterQuery(DDLQuery):
@@ -780,7 +785,10 @@ class Query:
         self._sql = re.sub(r'%s', self._param_index, sql)
         self.last_row_id = None
         self._result_generator = None
-
+        with open ("/home/omar/sqls","a+") as sqls:
+            sql_with_parms = "{0},\nParams:{1}\n\n".format(self._sql,self._params)
+            sqls.write(sql_with_parms)
+            sqls.close()
         self._query = self.parse()
 
     def count(self):
@@ -827,6 +835,9 @@ class Query:
                 f'Params: {self._params}\n'
                 f'Version: {djongo.__version__}'
             )
+            with open('/home/omar/failedsql','a+') as f:
+                f.write(exe.args[0])
+                f.close()
             raise exe from e
 
     def _param_index(self, _):
@@ -866,6 +877,11 @@ class Query:
                     params=self._params,
                     version=djongo.__version__
                 )
+                with open('/home/omar/failedsql', 'a+') as f:
+                    sql_with_parms = "{0},\nParams:{1}\n\n".format(self._sql, self._params)
+                    f.write(sql_with_parms)
+                    f.close()
+
                 raise exe from e
 
             except SQLDecodeError as e:
@@ -873,6 +889,11 @@ class Query:
                 e.err_sql = self._sql,
                 e.params = self._params,
                 e.version = djongo.__version__
+                with open('/home/omar/failedsql', 'a+') as f:
+                    sql_with_parms = "{0},\nParams:{1}\n\n".format(self._sql, self._params)
+                    f.write(sql_with_parms)
+                    f.close()
+
                 raise e
 
             except Exception as e:
@@ -882,6 +903,11 @@ class Query:
                     params=self._params,
                     version=djongo.__version__
                 )
+                with open('/home/omar/failedsql', 'a+') as f:
+                    sql_with_parms = "{0},\nParams:{1}\n\n".format(self._sql, self._params)
+                    f.write(sql_with_parms)
+                    f.close()
+
                 raise exe from e
 
     def _alter(self, sm):
