@@ -134,6 +134,9 @@ class SelectQuery(DQLQuery):
 
             elif tok.match(tokens.Keyword, 'ORDER'):
                 self.order = OrderConverter(self, statement)
+            
+            elif tok.match(tokens.Keyword, 'ORDER BY'):
+                self.order = OrderConverter(self, statement)
 
             elif tok.match(tokens.Keyword, 'OFFSET'):
                 self.offset = OffsetConverter(self, statement)
