@@ -2,6 +2,9 @@
 Module with constants and mappings to build MongoDB queries from
 SQL constructors.
 """
+
+# THIS FILE WAS CHANGED ON - 19 Aug 2022
+
 import abc
 import re
 from logging import getLogger
@@ -18,8 +21,10 @@ from sqlparse import tokens
 from sqlparse.sql import (
     Identifier, Parenthesis,
     Where,
-    Statement)
+    Statement, Comparison, Token, TokenList, Values)
+from sqlparse.tokens import Keyword, Operator, Literal, Punctuation, Whitespace, Generic
 
+from .operators import OPERATOR_PRECEDENCE, AND_OR_NOT_SEPARATOR
 from ..exceptions import SQLDecodeError, MigrationError, print_warn
 from .functions import SQLFunc
 from .sql_tokens import (SQLToken, SQLStatement, SQLIdentifier,
@@ -28,7 +33,7 @@ from .converters import (
     ColumnSelectConverter, AggColumnSelectConverter, FromConverter, WhereConverter,
     AggWhereConverter, InnerJoinConverter, OuterJoinConverter, LimitConverter, AggLimitConverter, OrderConverter,
     SetConverter, AggOrderConverter, DistinctConverter, NestedInQueryConverter, GroupbyConverter, OffsetConverter,
-    AggOffsetConverter, HavingConverter,OrderByConverter)
+    AggOffsetConverter, HavingConverter)
 
 from djongo import base
 logger = getLogger(__name__)
@@ -127,9 +132,6 @@ class SelectQuery(DQLQuery):
             elif tok.match(tokens.Keyword, 'LIMIT'):
                 self.limit = LimitConverter(self, statement)
 
-            elif tok.match(tokens.Keyword, 'ORDER BY'):
-                self.order = OrderByConverter(self, statement)
-
             elif tok.match(tokens.Keyword, 'ORDER'):
                 self.order = OrderConverter(self, statement)
 
@@ -144,7 +146,7 @@ class SelectQuery(DQLQuery):
                 converter = OuterJoinConverter(self, statement)
                 self.joins.append(converter)
 
-            elif tok.match(tokens.Keyword, 'GROUP'):
+            elif tok.match(tokens.Keyword, 'GROUP BY'):
                 self.groupby = GroupbyConverter(self, statement)
 
             elif tok.match(tokens.Keyword, 'HAVING'):
@@ -357,18 +359,21 @@ class InsertQuery(DMLQuery):
 
     def _fill_values(self, statement: SQLStatement):
         for tok in statement:
-            print(type(tok))
-            if not tok.match(None, 'VALUES',True):
+            if isinstance(tok, Parenthesis):
+                placeholder = SQLToken.token2sql(tok, self)
+                values = []
+                for index in placeholder:
+                    if isinstance(index, int):
+                        values.append(self.params[index])
+                    else:
+                        values.append(index)
+                self._values.append(values)
+            elif isinstance(tok, Values):
+                self._fill_values(statement=tok.tokens)
+            elif tok.ttype in [Whitespace]:
+                continue
+            elif not tok.match(tokens.Keyword, 'VALUES'):
                 raise SQLDecodeError
-
-            placeholder = SQLToken.token2sql(tok.tokens[2], self)
-            values = []
-            for index in placeholder:
-                if isinstance(index, int):
-                    values.append(self.params[index])
-                else:
-                    values.append(index)
-            self._values.append(values)
 
     def execute(self):
         docs = []
@@ -411,8 +416,6 @@ class InsertQuery(DMLQuery):
         self._table(statement)
         self._columns(statement)
         self._fill_values(statement)
-
-
 
 
 class AlterQuery(DDLQuery):
@@ -469,14 +472,13 @@ class AlterQuery(DDLQuery):
             self.execute = self._rename_collection
 
     def _rename_column(self):
-        self.db[self.left_table].update(
+        self.db[self.left_table].update_many(
             {},
             {
                 '$rename': {
                     self._old_name: self._new_name
                 }
-            },
-            multi=True
+            }
         )
 
     def _rename_collection(self):
@@ -535,16 +537,15 @@ class AlterQuery(DDLQuery):
         self.db[self.left_table].drop_index(self._iden_name)
 
     def _drop_column(self):
-        self.db[self.left_table].update(
+        self.db[self.left_table].update_many(
             {},
             {
                 '$unset': {
                     self._iden_name: ''
                 }
-            },
-            multi=True
+            }
         )
-        self.db['__schema__'].update(
+        self.db['__schema__'].update_one(
             {'name': self.left_table},
             {
                 '$unset': {
@@ -605,7 +606,7 @@ class AlterQuery(DDLQuery):
                                      err_sub_sql=statement)
 
     def _add_column(self):
-        self.db[self.left_table].update(
+        self.db[self.left_table].update_many(
             {
                 '$or': [
                     {self._iden_name: {'$exists': False}},
@@ -616,10 +617,9 @@ class AlterQuery(DDLQuery):
                 '$set': {
                     self._iden_name: self._default
                 }
-            },
-            multi=True
+            }
         )
-        self.db['__schema__'].update(
+        self.db['__schema__'].update_one(
             {'name': self.left_table},
             {
                 '$set': {
@@ -783,12 +783,14 @@ class Query:
         self.connection_properties = connection_properties
         self._params_index_count = -1
         self._sql = re.sub(r'%s', self._param_index, sql)
+
         self.last_row_id = None
         self._result_generator = None
-        with open ("/home/omar/sqls","a+") as sqls:
-            sql_with_parms = "{0},\nParams:{1}\n\n".format(self._sql,self._params)
-            sqls.write(sql_with_parms)
-            sqls.close()
+
+        self.skip = False
+        self.skipped = 0
+        self.is_where = False
+
         self._query = self.parse()
 
     def count(self):
@@ -835,9 +837,6 @@ class Query:
                 f'Params: {self._params}\n'
                 f'Version: {djongo.__version__}'
             )
-            with open('/home/omar/failedsql','a+') as f:
-                f.write(exe.args[0])
-                f.close()
             raise exe from e
 
     def _param_index(self, _):
@@ -849,7 +848,62 @@ class Query:
             f'sql_command: {self._sql}\n'
             f'params: {self._params}'
         )
-        statement = sqlparse(self._sql)
+
+        def check_conditions(item):
+            if not getattr(self, 'is_where', False):
+                self.is_where = getattr(item, 'value', None) == 'WHERE' and getattr(item, 'ttype', None) == Keyword
+            if getattr(item, 'value', None) in Where.M_CLOSE[1] and getattr(item, 'ttype', None) == Where.M_CLOSE[0]:
+                self.is_where = False
+
+            parent: TokenList = getattr(item, 'parent', None)
+            index_of_precedence = parent.token_index(item)
+            next_token = parent.token_next(index_of_precedence, skip_ws=True, skip_cm=True)[1]
+            next_token_value = getattr(next_token, 'value', False)
+
+            if OPERATOR_PRECEDENCE.get(next_token_value, 0) > AND_OR_NOT_SEPARATOR:
+                self.skip = True
+            else:
+                self.skip = False
+
+            return self.is_where and not self.skip
+
+        def parse_where(where_item):
+            identifier_token_list = [
+                Token(ttype=Literal.String.Symbol, value=value) for value in where_item.value.split('.')
+            ]
+            for identifier_token_list_index in range(1, len(identifier_token_list), 2):
+                identifier_token_list.insert(identifier_token_list_index, Token(ttype=Punctuation, value='.'))
+            return Comparison([
+                    Identifier(identifier_token_list),
+                    Token(ttype=Operator.Comparison, value='='),
+                    Token(ttype=Generic, value=True)
+                ])
+
+        def from_part(token, token_list):
+            if check_conditions(token) and isinstance(token, Identifier) and not isinstance(token.parent, Comparison):
+                token = parse_where(token)
+            elif self.skip:
+                return token
+            if hasattr(token, 'tokens'):
+                to_append_token_list = []
+                for new_token in getattr(token, 'tokens', []):
+                    to_append_token_list.append(from_part(new_token, token_list))
+                token = token.__class__(to_append_token_list)
+
+            return token
+
+        def from_statement(_statement):
+            _statement = _statement[0]
+            statement_tokens = []
+
+            for token_index, token in enumerate(_statement.tokens):
+                statement_tokens.append(from_part(token, []))
+
+            return Statement(statement_tokens)
+
+        statement = []
+        sql = sqlparse(self._sql)
+        statement.append(from_statement(sql))
 
         if len(statement) > 1:
             raise SQLDecodeError(self._sql)
@@ -877,11 +931,6 @@ class Query:
                     params=self._params,
                     version=djongo.__version__
                 )
-                with open('/home/omar/failedsql', 'a+') as f:
-                    sql_with_parms = "{0},\nParams:{1}\n\n".format(self._sql, self._params)
-                    f.write(sql_with_parms)
-                    f.close()
-
                 raise exe from e
 
             except SQLDecodeError as e:
@@ -889,11 +938,6 @@ class Query:
                 e.err_sql = self._sql,
                 e.params = self._params,
                 e.version = djongo.__version__
-                with open('/home/omar/failedsql', 'a+') as f:
-                    sql_with_parms = "{0},\nParams:{1}\n\n".format(self._sql, self._params)
-                    f.write(sql_with_parms)
-                    f.close()
-
                 raise e
 
             except Exception as e:
@@ -903,11 +947,6 @@ class Query:
                     params=self._params,
                     version=djongo.__version__
                 )
-                with open('/home/omar/failedsql', 'a+') as f:
-                    sql_with_parms = "{0},\nParams:{1}\n\n".format(self._sql, self._params)
-                    f.write(sql_with_parms)
-                    f.close()
-
                 raise exe from e
 
     def _alter(self, sm):

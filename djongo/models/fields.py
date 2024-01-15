@@ -13,6 +13,8 @@ MongoDB is defined.
 These are the main fields for working with MongoDB.
 """
 
+# THIS FILE WAS CHANGED ON - 28 Mar 2022
+
 import functools
 import json
 import typing
@@ -149,6 +151,7 @@ class ModelField(MongoField):
                  model_container: typing.Type[Model],
                  *args, **kwargs):
         self.model_container = model_container
+        self.model_container._meta.abstract = False
         self._validate_container()
         super().__init__(*args, **kwargs)
 
@@ -811,7 +814,7 @@ def create_reverse_array_reference_manager(superclass, rel):
         def add(self, *objs):
             _filter = self._make_filter(*objs)
             lh_field, rh_field = self.field.related_fields[0]
-            self.mongo_update(
+            self.mongo_update_one(
                 _filter,
                 {
                     '$addToSet': {
@@ -906,7 +909,7 @@ def create_forward_array_reference_manager(superclass, rel):
             fks.update(new_fks)
 
             db = router.db_for_write(self.instance.__class__, instance=self.instance)
-            self.instance_manager.db_manager(db).mongo_update(
+            self.instance_manager.db_manager(db).mongo_update_one(
                 self._make_filter(),
                 {
                     '$addToSet': {
@@ -932,7 +935,7 @@ def create_forward_array_reference_manager(superclass, rel):
             fks = getattr(self.instance, self.field.attname)
             fks.difference_update(to_del)
             db = self._db or router.db_for_write(self.instance.__class__, instance=self.instance)
-            self.instance_manager.db_manager(db).mongo_update(
+            self.instance_manager.db_manager(db).mongo_update_one(
                 self._make_filter(),
                 {
                     '$pull': {
@@ -945,7 +948,7 @@ def create_forward_array_reference_manager(superclass, rel):
 
         def clear(self):
             db = router.db_for_write(self.instance.__class__, instance=self.instance)
-            self.instance_manager.db_manager(db).mongo_update(
+            self.instance_manager.db_manager(db).mongo_update_one(
                 self._make_filter(),
                 {
                     '$set': {

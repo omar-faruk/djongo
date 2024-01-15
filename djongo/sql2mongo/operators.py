@@ -1,9 +1,13 @@
+# THIS FILE WAS CHANGED ON - 21 Nov 2022
+
 import re
 import typing
+import json
 from itertools import chain
 
+import bson.regex
 from sqlparse import tokens
-from sqlparse.sql import Token, Parenthesis, Comparison, IdentifierList, Identifier, Function
+from sqlparse.sql import Token, Parenthesis, Comparison, IdentifierList, Identifier
 
 from ..exceptions import SQLDecodeError
 from .sql_tokens import SQLToken, SQLStatement
@@ -11,11 +15,15 @@ from . import query
 
 
 def re_index(value: str):
-    match = re.match(r'%\(([0-9]+)\)s', value, flags=re.IGNORECASE)
+    match = list(re.finditer(r'%\(([0-9]+)\)s', value, flags=re.IGNORECASE))
+
     if match:
-        index = int(match.group(1))
+        if len(match) == 1:
+            index = int(match[0].group(1))
+        else:
+            index = [int(x.group(1)) for x in match]
     else:
-        match = re.match(r'NULL', value, flags=re.IGNORECASE)
+        match = re.match(r'NULL|true', value, flags=re.IGNORECASE)
         if not match:
             raise SQLDecodeError
         index = None
@@ -152,36 +160,41 @@ class InOp(_InNotInOp):
         self.is_negated = True
 
 
-class LikeOp(_BinaryOp):
+class LikeOp:
+    def __init__(self, to_match):
+        self.to_match = self.check_embedded(to_match)
+        self.field_ext = ''
+        self.regex = self.make_regex()
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(name='LIKE', *args, **kwargs)
-        self._regex = None
-        self._make_regex(self.statement.next())
+    @staticmethod
+    def check_embedded(to_match):
+        try:
+            check_dict = to_match
+            replace_chars = "\\%'"
+            for c in replace_chars:
+                if c == "'":
+                    check_dict = check_dict.replace("'", '"')
+                else:
+                    check_dict = check_dict.replace(c, "")
+            check_dict = json.loads(check_dict)
+            if isinstance(check_dict, dict):
+                return check_dict
+            else:
+                return to_match
+        except Exception as e:
+            return to_match
 
-    def _make_regex(self, token):
-        index = SQLToken.placeholder_index(token)
-
-        to_match = self.params[index]
-        if isinstance(to_match, dict):
-            field_ext, to_match = next(iter(to_match.items()))
-            self._field += '.' + field_ext
-        if not isinstance(to_match, str):
+    def make_regex(self):
+        if isinstance(self.to_match, str):
+            to_match = self.to_match.replace('%', '.*')
+            regex = '^' + to_match + '$'
+        elif isinstance(self.to_match, dict):
+            regex = self.to_match
+            field_ext, self.to_match = next(iter(self.to_match.items()))
+            self.field_ext += field_ext
+        else:
             raise SQLDecodeError
-
-        to_match = to_match.replace('%', '.*')
-        self._regex = '^' + to_match + '$'
-
-    def to_mongo(self):
-        return {self._field: {'$regex': self._regex}}
-
-
-class iLikeOp(LikeOp):
-    def to_mongo(self):
-        return {self._field: {
-            '$regex': self._regex,
-            '$options': 'im'
-        }}
+        return regex
 
 
 class IsOp(_BinaryOp):
@@ -362,7 +375,6 @@ class _StatementParser:
                   statement: SQLStatement) -> '_Op':
         op = None
         kw = {'statement': statement, 'query': self.query}
-
         if tok.match(tokens.Keyword, 'AND'):
             op = AndOp(**kw)
 
@@ -401,12 +413,6 @@ class _StatementParser:
 
         elif tok.match(tokens.Punctuation, (')', '(')):
             pass
-
-        elif tok.match(tokens.Keyword, 'LIKE'):
-            op = LikeOp(**kw)
-
-        elif tok.match(tokens.Keyword, 'iLIKE'):
-            op = iLikeOp(**kw)
 
         elif isinstance(tok, Identifier):
             pass
@@ -507,12 +513,24 @@ class CmpOp(_Op):
         if isinstance(self.statement.right, Identifier):
             raise SQLDecodeError('Join using WHERE not supported')
 
-        self._operator = OPERATOR_MAP[self.statement.token_next(0)[1].value]
+        self._sql_operator = self.statement.token_next(0)[1].value
+        self._operator = OPERATOR_MAP[self._sql_operator]
         index = re_index(self.statement.right.value)
 
-        self._constant = self.params[index] if index is not None else None
+        if self._operator in NEW_OPERATORS:
+            index = index if isinstance(index, list) else [index]
+            self._constant = [self.params[i] for i in index]
+        else:
+            self._constant = self.params[index] if index is not None else MAP_INDEX_NONE[self.statement.right.value]
+
+        if self._sql_operator in LIKE_OPERATOR_MAP.keys():
+            like_op = LikeOp(to_match=self._constant)
+            self._constant = like_op.regex
+
         if isinstance(self._constant, dict):
             self._field_ext, self._constant = next(iter(self._constant.items()))
+        elif self._sql_operator in LIKE_OPERATOR_MAP.keys():
+            self._field_ext = getattr(like_op, 'field_ext', None)
         else:
             self._field_ext = None
 
@@ -526,12 +544,26 @@ class CmpOp(_Op):
         field = self._identifier.field
         if self._field_ext:
             field += '.' + self._field_ext
-
         if not self.is_negated:
-            return {field: {self._operator: self._constant}}
+            mongo = {field: {self._operator: self._constant}}
+            if self._sql_operator == 'iLIKE':
+                mongo[field]['$options'] = 'im'
         else:
-            return {field: {'$not': {self._operator: self._constant}}}
+            if self._sql_operator in LIKE_OPERATOR_MAP:
+                regex = bson.regex.Regex(self._constant, 'i')
+                if self._sql_operator == 'iLIKE':
+                    regex = bson.regex.Regex(self._constant, 'i')
+                mongo = {field: {'$not': regex}}
+            else:
+                mongo = {field: {'$not': {self._operator: self._constant}}}
 
+        return mongo
+
+
+LIKE_OPERATOR_MAP = {
+    'LIKE': '$regex',
+    'iLIKE': '$regex',
+}
 
 OPERATOR_MAP = {
     '=': '$eq',
@@ -539,6 +571,9 @@ OPERATOR_MAP = {
     '<': '$lt',
     '>=': '$gte',
     '<=': '$lte',
+    'IN': '$in',
+    'NOT IN': '$nin',
+    **LIKE_OPERATOR_MAP,
 }
 OPERATOR_PRECEDENCE = {
     'IS': 8,
@@ -551,3 +586,12 @@ OPERATOR_PRECEDENCE = {
     'OR': 1,
     'generic': 0
 }
+
+MAP_INDEX_NONE = {
+    'NULL': None,
+    'True': True
+}
+
+NEW_OPERATORS = ['$in', '$nin']
+
+AND_OR_NOT_SEPARATOR = 3
