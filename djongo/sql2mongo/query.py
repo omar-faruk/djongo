@@ -89,7 +89,7 @@ class DDLQuery(BaseQuery):
         super().__init__(*args)
 
     def execute(self):
-        return 
+        return
 
 
 class DQLQuery(BaseQuery):
@@ -134,7 +134,7 @@ class SelectQuery(DQLQuery):
 
             elif tok.match(tokens.Keyword, 'ORDER'):
                 self.order = OrderConverter(self, statement)
-            
+
             elif tok.match(tokens.Keyword, 'ORDER BY'):
                 self.order = OrderConverter(self, statement)
 
@@ -255,7 +255,7 @@ class SelectQuery(DQLQuery):
 
             if self.order:
                 kwargs.update(self.order.to_mongo())
-            
+
             if self.offset:
                 kwargs.update(self.offset.to_mongo())
 
@@ -506,6 +506,10 @@ class AlterQuery(DDLQuery):
                 feature += 'DEFAULT '
             elif tok.match(tokens.Keyword, 'SET'):
                 feature += 'SET '
+            elif tok.match(tokens.Keyword, 'TYPE'):
+                feature += 'TYPE'
+            elif tok.__str__() in ['string','int','double','date']:
+                feature += tok.__str__()
             else:
                 raise SQLDecodeError(f'Unknown token: {tok}')
 
